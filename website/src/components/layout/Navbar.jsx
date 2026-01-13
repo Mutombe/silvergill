@@ -4,6 +4,7 @@ import { Link, NavLink, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Menu, X, Phone, ChevronDown } from 'lucide-react';
 import { siteConfig, navLinks } from '../../data/content';
+import { TiThMenuOutline } from "react-icons/ti";
 
 const Navbar = () => {
   const [isOpen, setIsOpen] = useState(false);
@@ -134,7 +135,7 @@ const Navbar = () => {
               className="lg:hidden p-2 rounded-lg text-silver-600 hover:text-primary-600 hover:bg-silver-100 transition-colors"
               aria-label="Toggle menu"
             >
-              {isOpen ? <X size={24} /> : <Menu size={24} />}
+              {isOpen ? <X size={24} /> : <TiThMenuOutline size={24} />}
             </button>
           </div>
         </div>
