@@ -10,6 +10,7 @@ import { pool, q, one, healthy } from './db.js';
 import {
   requireAuth, requireRole, issueToken, verify, publicUser, scopeFor, canRead, audit, hash,
 } from './auth.js';
+import { extractEvent, configured as aiConfigured } from './anthropic.js';
 
 const app = express();
 app.set('trust proxy', 1);
@@ -72,13 +73,183 @@ const READABLE = {
 };
 
 /* ===========================================================================
+   Writable tables.
+   The portal creates records all over the place — a driver logs fuel, a
+   coordinator raises a job card, a customer requests a booking. Rather than
+   thirty near-identical handlers, one writer serves them all, but it will only
+   touch a table listed here, only for the roles listed here, and only the
+   columns listed here. Anything else the browser sends is dropped silently.
+   =========================================================================== */
+
+const WRITABLE = {
+  incidents: {
+    create: ['driver', 'ops'],
+    update: ['ops'],
+    columns: ['shipmentId', 'vehicleId', 'driverId', 'type', 'severity', 'description',
+              'location', 'photos', 'status', 'reportedAt', 'synced'],
+    json: ['photos'],
+    prefix: 'INC',
+  },
+  fuel_logs: {
+    create: ['driver', 'ops'],
+    update: ['ops'],
+    columns: ['vehicleId', 'driverId', 'litres', 'cost', 'odometer', 'station', 'loggedAt', 'synced'],
+    prefix: 'FL',
+  },
+  inspections: {
+    create: ['driver', 'ops'],
+    update: ['ops'],
+    columns: ['vehicleId', 'driverId', 'odometer', 'checks', 'notes', 'photos', 'inspectedAt', 'synced'],
+    json: ['checks', 'photos'],
+    prefix: 'INS',
+  },
+  job_cards: {
+    create: ['ops', 'management'],
+    update: ['ops', 'management'],
+    columns: ['vehicleId', 'status', 'priority', 'fault', 'odometer', 'parts',
+              'labourHours', 'labourRate', 'raisedBy', 'raisedAt', 'completedAt'],
+    json: ['parts'],
+    prefix: 'JC',
+  },
+  service_records: {
+    create: ['ops', 'management'],
+    update: ['ops', 'management'],
+    columns: ['vehicleId', 'type', 'odometer', 'cost', 'performedAt', 'notes'],
+    prefix: 'SVC',
+  },
+  quotations: {
+    create: ['sales', 'ops', 'management'],
+    update: ['sales', 'ops', 'management'],
+    columns: ['customerId', 'commodity', 'origin', 'destination', 'weightTons', 'mode', 'port',
+              'insurance', 'insuredValue', 'status', 'total', 'margin', 'createdBy', 'createdAt'],
+    prefix: 'QT',
+  },
+  bookings: {
+    create: ['client', 'sales', 'ops'],
+    update: ['sales', 'ops'],
+    columns: ['customerId', 'commodity', 'weightTons', 'originCode', 'portCode', 'modeCode',
+              'readyDate', 'notes', 'reference', 'status', 'raisedBy', 'raisedAt', 'shipmentId'],
+    prefix: 'BKG',
+    // A customer may only book for themselves, whatever the payload claims.
+    pin: (user, row) => (user.role === 'client' ? { ...row, customerId: user.customerId } : row),
+  },
+  documents: {
+    create: ['ops', 'sales', 'management'],
+    update: ['ops', 'management'],
+    columns: ['shipmentId', 'type', 'fileName', 'status', 'confidence', 'uploadedAt', 'bcRef', 'fields'],
+    json: ['fields'],
+    prefix: 'DOC',
+  },
+  jobs: {
+    create: ['ops', 'management'],
+    update: ['ops', 'management'],
+    columns: ['shipmentId', 'supplierId', 'description', 'status', 'value', 'currency', 'issuedAt', 'dueAt'],
+    prefix: 'JOB',
+  },
+  supplier_invoices: {
+    create: ['supplier', 'ops'],
+    update: ['ops', 'management'],
+    columns: ['supplierId', 'jobId', 'invoiceNumber', 'amount', 'currency', 'status',
+              'submittedAt', 'notes', 'bcRef'],
+    prefix: 'SINV',
+    pin: (user, row) => (user.role === 'supplier' ? { ...row, supplierId: user.supplierId } : row),
+  },
+  rate_requests: {
+    create: ['ops', 'management'],
+    update: ['ops', 'management'],
+    columns: ['lane', 'commodity', 'weightTons', 'modeCode', 'neededBy', 'status',
+              'raisedBy', 'raisedAt', 'invited', 'responses', 'awardedTo'],
+    json: ['invited', 'responses'],
+    prefix: 'RFQ',
+  },
+  inbox_queue: {
+    create: ['ops', 'driver', 'management'],
+    update: ['ops'],
+    columns: ['shipmentId', 'source', 'rawText', 'fromPhone', 'matchedBy', 'confidence',
+              'extraction', 'status', 'receivedAt'],
+    json: ['extraction'],
+    prefix: 'INB',
+  },
+  shipments: {
+    create: ['ops', 'management'],
+    update: ['ops', 'management'],
+    columns: ['customerId', 'commodity', 'weightTons', 'origin', 'destination', 'mode', 'port',
+              'border', 'vehicleId', 'driverId', 'status', 'entity', 'revenue', 'cost',
+              'dispatchedAt', 'etaAt', 'bcOrderNo', 'currentLocation', 'containerNo',
+              'truckReg', 'driverPhone', 'trackingToken'],
+    prefix: 'SHP',
+  },
+  alert_rules: {
+    create: ['management', 'admin'],
+    update: ['management', 'admin'],
+    columns: ['name', 'metric', 'target', 'comparator', 'threshold', 'channel', 'active'],
+    prefix: 'ALR',
+  },
+  vehicles: {
+    create: ['ops', 'management'],
+    update: ['ops', 'management'],
+    columns: ['reg', 'make', 'model', 'year', 'type', 'odometer', 'entity', 'status',
+              'driverId', 'lastServiceKm', 'serviceIntervalKm', 'fuelTankL', 'tyres'],
+    json: ['tyres'],
+    prefix: 'VEH',
+  },
+};
+
+const snake = (s) => s.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
+
+/** Turn a browser payload into (columns, values), dropping anything not whitelisted. */
+function projectWrite(spec, body) {
+  const cols = [];
+  const vals = [];
+  for (const key of spec.columns) {
+    if (body[key] === undefined) continue;
+    cols.push(snake(key));
+    vals.push(spec.json?.includes(key) ? JSON.stringify(body[key] ?? null) : body[key]);
+  }
+  return { cols, vals };
+}
+
+/* ===========================================================================
    Health
    =========================================================================== */
 
 app.get('/api/health', async (_req, res) => {
   const db = await healthy();
-  res.status(db ? 200 : 503).json({ ok: db, service: 'silvergill-api', db });
+  res.status(db ? 200 : 503).json({ ok: db, service: 'silvergill-api', db, ai: aiConfigured() });
 });
+
+/* ===========================================================================
+   AI extraction.
+   Registered before the generic routes so /api/events/extract is not read as
+   a record lookup for a table called "events".
+
+   The browser never sees the API key. It posts the raw update here; it gets
+   back the same object the portal's offline extractor produces, so the caller
+   can fall through to that on any failure without a second code path.
+   =========================================================================== */
+
+app.post('/api/events/extract', requireAuth, requireRole('ops', 'management', 'driver', 'sales'),
+  async (req, res) => {
+    const { text, imageBase64, mediaType, context } = req.body || {};
+    if (!text && !imageBase64) {
+      return res.status(400).json({ error: 'text or imageBase64 is required' });
+    }
+    if (!aiConfigured()) {
+      // Not an error: the portal has a working local extractor and will use it.
+      return res.status(503).json({ error: 'hosted extraction is not configured', fallback: true });
+    }
+
+    try {
+      const event = await extractEvent({ text, imageBase64, mediaType, context });
+      return res.json({ ...event, extractedBy: 'model' });
+    } catch (err) {
+      console.error('[ai] extraction failed:', err.message);
+      // Every failure here is recoverable — say so, so the client falls back
+      // rather than showing the operator an error for a message it can still
+      // parse locally.
+      return res.status(502).json({ error: err.message, code: err.code ?? null, fallback: true });
+    }
+  });
 
 /* ===========================================================================
    Auth
@@ -140,6 +311,47 @@ app.get('/api/track/:token', async (req, res) => {
   );
 
   res.json({ shipment: toClient(shipment), events: list(events) });
+});
+
+/* ===========================================================================
+   Reads that need their own scoping rule
+   =========================================================================== */
+
+/** Notifications are addressed either to a person or to a role. */
+app.get('/api/notifications', requireAuth, async (req, res) => {
+  const rows = await q(
+    `select * from notifications
+      where for_user_id = $1 or for_roles @> to_jsonb($2::text)
+      order by at desc limit 200`,
+    [req.user.id, req.user.role]
+  );
+  res.json(list(rows));
+});
+
+app.patch('/api/notifications/:id', requireAuth, async (req, res) => {
+  const updated = await q(
+    `update notifications set read = $1
+      where id = $2 and (for_user_id = $3 or for_roles @> to_jsonb($4::text))
+      returning id`,
+    [Boolean(req.body?.read ?? true), req.params.id, req.user.id, req.user.role]
+  );
+  if (!updated.length) return res.status(404).json({ error: 'not found' });
+  res.json({ ok: true });
+});
+
+app.post('/api/notifications/read-all', requireAuth, async (req, res) => {
+  await q(
+    `update notifications set read = true
+      where read = false and (for_user_id = $1 or for_roles @> to_jsonb($2::text))`,
+    [req.user.id, req.user.role]
+  );
+  res.json({ ok: true });
+});
+
+/** The directory. Admin sees everyone; nobody else sees this at all. */
+app.get('/api/users', requireAuth, requireRole('admin'), async (_req, res) => {
+  const rows = await q('select * from users order by name');
+  res.json(rows.map(publicUser));
 });
 
 /* ===========================================================================
@@ -346,6 +558,75 @@ app.patch('/api/users/:id', requireAuth, requireRole('admin'), async (req, res) 
   await q(`update users set ${fields.join(', ')} where id = $${params.length}`, params);
   await audit(req.user, 'user.update', req.params.id, `Updated ${target.name}`);
   res.json(publicUser(await one('select * from users where id = $1', [req.params.id])));
+});
+
+/* ===========================================================================
+   Generic guarded writes.
+   Last, so every hand-written endpoint above wins its route. A table absent
+   from WRITABLE falls through to the 404 — the default is "no".
+   =========================================================================== */
+
+app.post('/api/:table', requireAuth, async (req, res, next) => {
+  const table = req.params.table;
+  const spec = WRITABLE[table];
+  if (!spec) return next();
+
+  if (req.user.role !== 'admin' && !spec.create.includes(req.user.role)) {
+    return res.status(403).json({ error: 'not permitted for your role' });
+  }
+
+  const body = spec.pin ? spec.pin(req.user, req.body || {}) : (req.body || {});
+  const { cols, vals } = projectWrite(spec, body);
+  if (!cols.length) return res.status(400).json({ error: 'nothing to write' });
+
+  const id = typeof body.id === 'string' && body.id ? body.id : newId(spec.prefix);
+  const placeholders = vals.map((_, i) => `$${i + 2}`);
+  // Cast the JSON columns explicitly; everything else is inferred.
+  const casts = cols.map((c, i) =>
+    spec.json?.some((k) => snake(k) === c) ? `${placeholders[i]}::jsonb` : placeholders[i]);
+
+  try {
+    await q(
+      `insert into ${table}(id, ${cols.join(', ')}) values ($1, ${casts.join(', ')})`,
+      [id, ...vals]
+    );
+  } catch (err) {
+    // A bad foreign key is the caller's mistake, not a server fault.
+    if (err.code === '23503' || err.code === '23505' || err.code === '23514') {
+      return res.status(400).json({ error: err.detail || err.message });
+    }
+    throw err;
+  }
+
+  await audit(req.user, `${table}.create`, id, `Created ${id}`);
+  const row = await one(`select * from ${table} where id = $1`, [id]);
+  return res.status(201).json(toClient(row));
+});
+
+app.patch('/api/:table/:id', requireAuth, async (req, res, next) => {
+  const { table, id } = req.params;
+  const spec = WRITABLE[table];
+  if (!spec) return next();
+
+  if (req.user.role !== 'admin' && !spec.update.includes(req.user.role)) {
+    return res.status(403).json({ error: 'not permitted for your role' });
+  }
+  // Updating a row you were never allowed to read is not a thing.
+  if (!(await canRead(req.user, table, id))) {
+    return res.status(403).json({ error: 'not available on your profile' });
+  }
+
+  const { cols, vals } = projectWrite(spec, req.body || {});
+  if (!cols.length) return res.status(400).json({ error: 'nothing to update' });
+
+  const assignments = cols.map((c, i) => {
+    const cast = spec.json?.some((k) => snake(k) === c) ? '::jsonb' : '';
+    return `${c} = $${i + 1}${cast}`;
+  });
+
+  await q(`update ${table} set ${assignments.join(', ')} where id = $${vals.length + 1}`, [...vals, id]);
+  await audit(req.user, `${table}.update`, id, `Updated ${id}`);
+  return res.json(toClient(await one(`select * from ${table} where id = $1`, [id])));
 });
 
 /* ===========================================================================

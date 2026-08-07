@@ -6,6 +6,7 @@
 // above them do not change.
 
 import * as db from './db';
+import { patch, post } from './api';
 
 /**
  * Write an audit entry.
@@ -57,12 +58,18 @@ export function inboxFor(user, all) {
     .sort((a, b) => new Date(b.at) - new Date(a.at));
 }
 
+// Marking read is optimistic on purpose: the badge should clear the instant it
+// is clicked. If the call fails the notification is still there on next load,
+// which is the right way round for something that must not be lost silently.
+
 export function markRead(id) {
   db.update('notifications', id, { read: true });
+  patch(`/api/notifications/${encodeURIComponent(id)}`, { read: true }).catch(() => {});
 }
 
 export function markAllRead(user, all) {
   inboxFor(user, all)
     .filter((n) => !n.read)
     .forEach((n) => db.update('notifications', n.id, { read: true }));
+  post('/api/notifications/read-all').catch(() => {});
 }

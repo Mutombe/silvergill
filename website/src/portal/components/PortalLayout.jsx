@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import * as Icons from 'lucide-react';
@@ -8,6 +8,7 @@ import { useAuth } from '../auth/AuthContext';
 import { groupedModulesForRole } from '../modules';
 import { useCollection, useOnlineStatus, usePendingSync } from '../hooks';
 import { flushQueue } from '../data/bcClient';
+import { onSyncError } from '../data/db';
 import { inboxFor, markAllRead, markRead } from '../data/activity';
 import { siteConfig } from '../../data/content';
 import { timeLabel } from './ui';
@@ -86,6 +87,19 @@ const SEVERITY_STYLE = {
 
 const PortalLayout = () => {
   const { user, signOut, roleLabel, isCustomer, home } = useAuth();
+
+  // A write that the server refused has already been rolled back in the store.
+  // Saying so out loud is the whole point: the alternative is a row that looks
+  // saved on screen and does not exist.
+  useEffect(
+    () =>
+      onSyncError(({ action, message }) => {
+        toast.error(action === 'load' ? 'Could not load some data' : 'That change was not saved', {
+          description: message,
+        });
+      }),
+    []
+  );
   const navigate = useNavigate();
   const online = useOnlineStatus();
   const pending = usePendingSync();

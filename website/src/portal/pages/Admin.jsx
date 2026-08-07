@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import { useAuth } from '../auth/AuthContext';
 import { useCollection, usePendingSync, useOnlineStatus } from '../hooks';
 import * as db from '../data/db';
+import { patch as patchApi, post } from '../data/api';
 import { record } from '../data/activity';
 import { BC_ENDPOINTS } from '../data/bcClient';
 import { modules } from '../modules';
@@ -240,7 +241,7 @@ const UserAdmin = ({ users }) => {
 
   const set = (key) => (e) => setForm((f) => ({ ...f, [key]: e.target.value }));
 
-  const save = (event) => {
+  const save = async (event) => {
     event.preventDefault();
 
     const payload = {
@@ -271,41 +272,49 @@ const UserAdmin = ({ users }) => {
       return;
     }
 
-    if (editing === 'new') {
-      if (!form.password || form.password.length < 6) {
-        toast.error('Set a password of at least six characters.');
-        return;
+    // Accounts are created and changed on the server. The password is posted
+    // once and hashed there; it is never held in the browser's store, and the
+    // API refuses these calls for anyone who is not an administrator — the
+    // checks above are courtesy, not enforcement.
+    try {
+      if (editing === 'new') {
+        if (!form.password || form.password.length < 8) {
+          toast.error('Set a password of at least eight characters.');
+          return;
+        }
+        await post('/api/users', { ...payload, password: form.password });
+        toast.success(`${payload.name} created`, { description: ROLE_LABELS[payload.role] });
+      } else {
+        const changes = { name: payload.name, title: payload.title, entity: payload.entity,
+                          role: payload.role, active: payload.active };
+        if (form.password) changes.password = form.password;
+        await patchApi(`/api/users/${encodeURIComponent(editing)}`, changes);
+        toast.success(`${payload.name} updated`);
       }
-      const created = db.insert('users', {
-        ...payload,
-        password: form.password,
-        lastSignInAt: null,
-        createdAt: new Date().toISOString().slice(0, 10),
-      });
-      record(me, 'user.create', created.id, `Created ${payload.name} (${ROLE_LABELS[payload.role]})`);
-      toast.success(`${payload.name} created`, { description: ROLE_LABELS[payload.role] });
-    } else {
-      const patch = { ...payload };
-      if (form.password) patch.password = form.password;
-      db.update('users', editing, patch);
-      record(me, 'user.update', editing, `Updated ${payload.name} (${ROLE_LABELS[payload.role]})`);
-      toast.success(`${payload.name} updated`);
+      await db.refresh('users');
+      setEditing(null);
+    } catch (err) {
+      toast.error('That could not be saved', { description: err.message });
     }
-
-    setEditing(null);
   };
 
-  const toggleActive = (row) => {
+  const toggleActive = async (row) => {
     if (row.id === me.id) {
       toast.error('You cannot deactivate your own account.');
       return;
     }
     const next = !row.active;
-    db.update('users', row.id, { active: next });
-    record(me, next ? 'user.activate' : 'user.deactivate', row.id, `${next ? 'Activated' : 'Deactivated'} ${row.name}`);
-    toast.success(`${row.name} ${next ? 'reactivated' : 'deactivated'}`, {
-      description: next ? 'They can sign in again.' : 'Existing sessions are invalidated on next load.',
-    });
+    try {
+      await patchApi(`/api/users/${encodeURIComponent(row.id)}`, { active: next });
+      await db.refresh('users');
+      toast.success(`${row.name} ${next ? 'reactivated' : 'deactivated'}`, {
+        description: next
+          ? 'They can sign in again.'
+          : 'Their next request is rejected — an open session does not survive this.',
+      });
+    } catch (err) {
+      toast.error('That could not be saved', { description: err.message });
+    }
   };
 
   return (
@@ -485,7 +494,7 @@ const UserAdmin = ({ users }) => {
           <Field
             label={editing === 'new' ? 'Password' : 'New password'}
             required={editing === 'new'}
-            hint={editing === 'new' ? 'At least six characters.' : 'Leave blank to keep the current password.'}
+            hint={editing === 'new' ? 'At least eight characters.' : 'Leave blank to keep the current password.'}
           >
             <Input type="text" value={form.password} onChange={set('password')} placeholder="••••••••" />
           </Field>
@@ -816,56 +825,73 @@ const Integration = () => {
 
 /* ===== Data management ===== */
 
+/** Collections worth putting in a snapshot. Reference data is skipped. */
+const EXPORTABLE = [
+  'shipments', 'shipmentEvents', 'quotations', 'invoices', 'bookings', 'documents',
+  'jobs', 'supplierInvoices', 'rateRequests', 'jobCards', 'serviceRecords',
+  'fuelLogs', 'inspections', 'incidents', 'pods', 'inboxQueue', 'auditLog',
+  'customers', 'suppliers', 'vehicles', 'drivers',
+];
+
 const DataAdmin = () => {
   const { user: me } = useAuth();
   const [confirming, setConfirming] = useState(false);
 
   const exportAll = () => {
-    const raw = localStorage.getItem('silvergill.portal.v1');
-    const blob = new Blob([raw || '{}'], { type: 'application/json' });
+    // A snapshot of what this account is authorised to see, not of the
+    // database — the server has already decided which rows reached us.
+    const snapshot = { exportedAt: new Date().toISOString(), exportedBy: me?.email ?? null };
+    for (const collection of EXPORTABLE) snapshot[collection] = db.read(collection);
+
+    const blob = new Blob([JSON.stringify(snapshot, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
     link.download = `silvergill-portal-${new Date().toISOString().slice(0, 10)}.json`;
     link.click();
     URL.revokeObjectURL(url);
-    record(me, 'data.export', null, 'Exported the full portal store');
+    record(me, 'data.export', null, 'Exported a portal snapshot');
     toast.success('Export downloaded');
   };
 
   const reset = () => {
     db.resetStore();
     setConfirming(false);
-    toast.success('Store reset to seed data', {
-      description: 'Every captured record on this device has been cleared.',
+    toast.success('Outbox cleared', {
+      description: 'Unsent captures on this device have been discarded. Nothing on the server changed.',
     });
   };
 
   return (
     <div className="grid lg:grid-cols-2 gap-6">
       <Card>
-        <SectionHeading title="Export" description="A full snapshot of the local store as JSON." />
+        <SectionHeading title="Export" description="A JSON snapshot of everything loaded for you." />
         <p className="text-sm text-silver-600 mb-5">
-          Useful for handing a dataset to a developer, or for keeping a copy before you reset a demo
-          device. Photos and signatures are included as data URLs, so the file can be large.
+          Useful for handing a dataset to a developer or an auditor. It contains what your account
+          is authorised to read and nothing more — photos and signatures are included as data URLs,
+          so the file can be large.
         </p>
         <Button icon={Icons.Download} onClick={exportAll}>
-          Export everything
+          Export what I can see
         </Button>
       </Card>
 
       <Card>
-        <SectionHeading title="Reset" description="Return every collection to its seed state." />
+        <SectionHeading
+          title="Clear this device"
+          description="Discard captures still waiting to sync."
+        />
         <div className="flex items-start gap-2.5 p-3.5 rounded-xl bg-red-50 border border-red-200 text-sm text-red-800 mb-5">
           <Icons.TriangleAlert size={16} className="mt-0.5 shrink-0" />
-          This clears every proof of delivery, incident, fuel log, inspection, quotation and document
-          captured on this device. It cannot be undone.
+          This discards proofs of delivery, incidents, fuel logs and inspections captured offline on
+          this device that have <strong>not</strong> reached the server yet. They cannot be
+          recovered. Records already synced are untouched.
         </div>
 
         {confirming ? (
           <div className="flex gap-3">
             <Button variant="danger" icon={Icons.Trash2} onClick={reset}>
-              Yes, reset everything
+              Yes, discard the outbox
             </Button>
             <Button variant="secondary" onClick={() => setConfirming(false)}>
               Cancel
@@ -873,7 +899,7 @@ const DataAdmin = () => {
           </div>
         ) : (
           <Button variant="secondary" icon={Icons.RotateCcw} onClick={() => setConfirming(true)}>
-            Reset the store
+            Clear the outbox
           </Button>
         )}
       </Card>

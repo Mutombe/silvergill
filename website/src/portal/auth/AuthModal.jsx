@@ -9,7 +9,7 @@ import { toast } from 'sonner';
 
 import { useAuth } from './AuthContext';
 import { Button, Field, Input, Select, TextArea, Toggle } from '../components/ui';
-import { users, ROLE_LABELS, ROLE_DESCRIPTIONS, ROLE_AUDIENCE, ROLE_HOME } from '../data/seed';
+import { ROLE_HOME } from '../data/seed';
 import { siteConfig } from '../../data/content';
 
 /* ===========================================================================
@@ -133,17 +133,10 @@ const AuthModal = ({ open, onClose, audience = 'staff', initialPanel = 'signin',
     setSent(true);
   };
 
-  const applyDemo = (demoUser) => {
-    setEmail(demoUser.email);
-    setPassword(demoUser.password);
-    setError(null);
-  };
-
   if (!open) return null;
 
   const copy = AUDIENCE_COPY[audience] || AUDIENCE_COPY.staff;
   const AudienceIcon = copy.icon;
-  const demoAccounts = users.filter((u) => ROLE_AUDIENCE[u.role] === audience);
 
   return createPortal(
     <AnimatePresence>
@@ -284,34 +277,6 @@ const AuthModal = ({ open, onClose, audience = 'staff', initialPanel = 'signin',
                     </button>
                   </p>
 
-                  {/* Demo accounts. Delete this block once real accounts exist. */}
-                  <div className="mt-7 pt-5 border-t border-silver-200">
-                    <p className="text-[11px] font-semibold uppercase tracking-wider text-silver-400 mb-2.5">
-                      Demo accounts — password <span className="text-silver-600">silvergill</span>
-                    </p>
-                    <div className="grid grid-cols-2 gap-1.5">
-                      {(demoAccounts.length ? demoAccounts : users).map((demoUser) => (
-                        <button
-                          key={demoUser.id}
-                          type="button"
-                          onClick={() => applyDemo(demoUser)}
-                          className="text-left px-2.5 py-2 rounded-lg border border-silver-200 hover:border-primary-300 hover:bg-primary-50/40 transition-colors"
-                          title={ROLE_DESCRIPTIONS[demoUser.role]}
-                        >
-                          <span className="block text-xs font-medium text-silver-800 capitalize">{demoUser.role}</span>
-                          <span className="block text-[10px] text-silver-400 truncate">{demoUser.email}</span>
-                        </button>
-                      ))}
-                    </div>
-                    {audience !== 'staff' && (
-                      <button
-                        onClick={() => applyDemo(users.find((u) => u.role === 'admin'))}
-                        className="mt-2 text-[11px] text-silver-400 hover:text-primary-600"
-                      >
-                        Use a staff account instead
-                      </button>
-                    )}
-                  </div>
                 </>
               )}
 

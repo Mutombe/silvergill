@@ -18,6 +18,13 @@ services:
     staticPublishPath: ./dist
     pullRequestPreviewsEnabled: false
 
+    envVars:
+      # Baked into the bundle at build time. The site and the API are separate
+      # origins, so this cannot be inferred at runtime — and the API's CORS
+      # allowlist has to name this site in return.
+      - key: VITE_API_URL
+        value: https://silvergill-api.onrender.com
+
     routes:
       - type: rewrite
         source: /*
@@ -58,3 +65,8 @@ services:
         generateValue: true
       - key: CORS_ORIGINS
         value: https://silvergill.onrender.com
+      # Hosted event extraction. Set in the dashboard; if it is absent the API
+      # says so on /api/health and the portal falls back to its local
+      # extractor rather than failing.
+      - key: ANTHROPIC_API_KEY
+        sync: false

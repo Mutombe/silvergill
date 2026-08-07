@@ -1,9 +1,9 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import * as Icons from 'lucide-react';
 
-import * as db from '../portal/data/db';
+import { get } from '../portal/data/api';
 import { shipmentProgress, lineKm, haversineKm } from '../portal/engine/geo';
 import { shipmentRisk } from '../portal/engine/forecast';
 import { borderOutlook, portOutlook } from '../portal/engine/forecast';
@@ -47,19 +47,23 @@ const dateTime = (iso) =>
     ? new Date(iso).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
     : '';
 
-/** Look a consignment up by tracking token, shipment id, or container number. */
-function findShipment(reference) {
-  const needle = String(reference || '').trim().toUpperCase();
+/**
+ * Look a consignment up by tracking token.
+ *
+ * This is the only unauthenticated read in the system, so the server decides
+ * what a holder of the reference is entitled to: origin, destination, status,
+ * position and the approved event history. No customer name, no revenue, no
+ * cost, no internal reference, no driver's phone number. That filtering happens
+ * in SQL — there is nothing here to get wrong.
+ */
+async function fetchShipment(reference) {
+  const needle = String(reference || '').trim();
   if (!needle) return null;
-  const flat = needle.replace(/[\s-]/g, '');
-  return (
-    db.read('shipments').find(
-      (s) =>
-        (s.trackingToken || '').toUpperCase() === needle ||
-        s.id.toUpperCase() === needle ||
-        (s.containerNo || '').toUpperCase().replace(/[\s-]/g, '') === flat
-    ) || null
-  );
+  try {
+    return await get(`/api/track/${encodeURIComponent(needle)}`, { auth: false });
+  } catch {
+    return null;
+  }
 }
 
 const Shell = ({ children }) => (
@@ -92,10 +96,28 @@ const Track = () => {
   const { token } = useParams();
   const navigate = useNavigate();
   const [query, setQuery] = useState(token || '');
+  const [result, setResult] = useState(null);
+  const [looking, setLooking] = useState(Boolean(token));
 
-  const shipment = useMemo(() => (token ? findShipment(token) : null), [token]);
+  useEffect(() => {
+    if (!token) {
+      setResult(null);
+      setLooking(false);
+      return undefined;
+    }
+    let cancelled = false;
+    setLooking(true);
+    fetchShipment(token).then((found) => {
+      if (cancelled) return;
+      setResult(found);
+      setLooking(false);
+    });
+    return () => { cancelled = true; };
+  }, [token]);
+
+  const shipment = result?.shipment ?? null;
   // Derived, not stored — a reference either resolves or it does not.
-  const notFound = Boolean(token) && !shipment;
+  const notFound = Boolean(token) && !looking && !shipment;
 
   const submit = (event) => {
     event.preventDefault();
@@ -104,9 +126,22 @@ const Track = () => {
     navigate(`/track/${encodeURIComponent(value.toUpperCase())}`);
   };
 
+  /* ===== Looking it up ===== */
+  if (looking) {
+    return (
+      <Shell>
+        <div className="max-w-xl mx-auto text-center py-16">
+          <Icons.Loader2 className="animate-spin text-primary-600 mx-auto mb-5" size={28} />
+          <p className="text-silver-500">
+            Looking up <span className="font-semibold text-silver-700">{token}</span>…
+          </p>
+        </div>
+      </Shell>
+    );
+  }
+
   /* ===== Search form ===== */
   if (!token || notFound) {
-    const samples = db.read('shipments').slice(0, 3);
     return (
       <Shell>
         <div className="max-w-xl mx-auto text-center">
@@ -144,22 +179,21 @@ const Track = () => {
             </div>
           )}
 
+          {/* No list of live consignments here. A public page that enumerates
+              other people's references is a public page that leaks them. */}
           <div className="pt-6 border-t border-silver-200">
-            <p className="text-xs font-semibold uppercase tracking-wider text-silver-400 mb-3">
-              Try a live consignment
+            <p className="text-sm text-silver-500">
+              Your reference is on your booking confirmation — it looks like{' '}
+              <span className="font-medium text-silver-700 tabular-nums">SGT-0000AA</span>. A
+              container or consignment number works too.
             </p>
-            <div className="flex flex-wrap gap-2 justify-center">
-              {samples.map((s) => (
-                <Link
-                  key={s.id}
-                  to={`/track/${s.trackingToken}`}
-                  className="text-xs px-3 py-2 rounded-lg border border-silver-200 bg-white text-silver-600 hover:border-primary-300 hover:text-primary-600 transition-colors"
-                >
-                  <span className="font-medium tabular-nums">{s.trackingToken}</span>
-                  <span className="text-silver-400 ml-2">{s.destination.split(',')[0]}</span>
-                </Link>
-              ))}
-            </div>
+            <p className="text-xs text-silver-400 mt-3">
+              Need a full history, documents and invoices?{' '}
+              <Link to="/portal" className="text-primary-600 hover:underline font-medium">
+                Sign in to your portal
+              </Link>
+              .
+            </p>
           </div>
         </div>
       </Shell>
@@ -167,10 +201,8 @@ const Track = () => {
   }
 
   /* ===== Result ===== */
-  const events = db
-    .read('shipmentEvents')
-    .filter((e) => e.shipmentId === shipment.id && e.approved)
-    .sort((a, b) => new Date(b.at) - new Date(a.at));
+  // The server returns only approved events, newest first.
+  const events = result.events || [];
 
   const borderData = borderOutlook(4);
   const portData = portOutlook(4);

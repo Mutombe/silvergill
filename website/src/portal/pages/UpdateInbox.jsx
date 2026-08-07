@@ -8,7 +8,7 @@ import * as db from '../data/db';
 import { record, notify } from '../data/activity';
 import { matchShipment, MATCH_METHODS } from '../engine/matching';
 import {
-  extractEvent, scoreConfidence, SOURCE_CONFIDENCE, SOURCE_LABEL,
+  extractEventHosted, scoreConfidence, SOURCE_CONFIDENCE, SOURCE_LABEL,
   EVENT_TYPE_LABEL, describeExtractionPath, EVENT_TOOL_SCHEMA,
 } from '../engine/events';
 
@@ -192,7 +192,6 @@ const Capture = ({ shipments, drivers, vehicles, user }) => {
       return;
     }
     setBusy(true);
-    await new Promise((r) => setTimeout(r, 550));
 
     // 1. Which consignment — deterministic, never guessed by a model.
     const match = matchShipment({
@@ -204,8 +203,21 @@ const Capture = ({ shipments, drivers, vehicles, user }) => {
       vehicles,
     });
 
-    // 2. What happened — structured extraction.
-    const extraction = extractEvent(text);
+    // 2. What happened — hosted extraction, falling back to the local rules.
+    //    Telling the model what we already matched keeps it from re-deriving a
+    //    reference it can only get wrong.
+    const context = match.shipment
+      ? `${match.shipment.id}, ${match.shipment.origin} to ${match.shipment.destination}, `
+        + `currently ${match.shipment.status}`
+      : null;
+    const extraction = await extractEventHosted(text, { context });
+
+    if (!extraction) {
+      setBusy(false);
+      toast.error('Nothing could be read from that update');
+      return;
+    }
+
     const confidence = scoreConfidence(source, extraction);
 
     setResult({ match, extraction, confidence, source, text, phone });
@@ -418,9 +430,16 @@ const Capture = ({ shipments, drivers, vehicles, user }) => {
                 <p className="text-xs font-semibold uppercase tracking-wider text-silver-500">
                   2 · Structured event
                 </p>
-                <Badge tone={TYPE_TONE[result.extraction.type]}>
-                  {EVENT_TYPE_LABEL[result.extraction.type]}
-                </Badge>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  {/* Which extractor answered. The operator is approving this,
+                      so they are entitled to know what read it. */}
+                  <Badge tone={result.extraction.extractedBy === 'model' ? 'info' : 'neutral'}>
+                    {result.extraction.extractedBy === 'model' ? 'Model' : 'Rules'}
+                  </Badge>
+                  <Badge tone={TYPE_TONE[result.extraction.type]}>
+                    {EVENT_TYPE_LABEL[result.extraction.type]}
+                  </Badge>
+                </div>
               </div>
 
               <p className="font-medium text-silver-900 mb-3">{result.extraction.label}</p>
@@ -834,8 +853,8 @@ const HowItWorks = () => (
           Model contract
         </p>
         <p className="text-sm text-silver-600 mb-3">
-          When the hosted extractor is switched on, the model is <em>forced</em> to call one tool, so
-          it must answer with typed JSON rather than prose that has to be parsed:
+          The model is <em>forced</em> to call one tool, so it must answer with typed JSON rather
+          than prose that has to be parsed:
         </p>
         <pre className="text-[11px] bg-silver-900 text-silver-100 rounded-xl p-3.5 overflow-x-auto custom-scroll">
 {JSON.stringify(
@@ -845,9 +864,11 @@ const HowItWorks = () => (
 )}
         </pre>
         <p className="text-xs text-silver-400 mt-3">
-          Local extraction runs today with no key and no network. Point{' '}
-          <code>extractEvent()</code> at your server endpoint to add vision and better free-text
-          handling — the queue, scoring and approval flow are unchanged.
+          The API key never leaves the server; the browser posts to{' '}
+          <code>/api/events/extract</code> and gets back a plain object. If the model is
+          unavailable the local rules answer instead and the event is tagged{' '}
+          <strong>Rules</strong> — an update at three in the morning from a border post still gets
+          queued.
         </p>
       </div>
     </Card>

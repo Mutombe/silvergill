@@ -12,6 +12,8 @@
 // shipment) is identical either way, so switching the extractor on changes the
 // accuracy of `label` and `location_text` and nothing else.
 
+import { post } from '../data/api';
+
 /**
  * The tool the model is forced to call. Forcing a tool call is what makes the
  * output reliable JSON rather than prose that has to be parsed.
@@ -224,21 +226,40 @@ export function extractEvent(text) {
   };
 }
 
+/* ===========================================================================
+   Hosted extraction
+   =========================================================================== */
+
 /**
- * Where the hosted model call goes, if you want vision (tracking screenshots)
- * and better free-text handling than the rules above give you.
+ * Extract an event using the hosted model, falling back to the local rules.
  *
- *   const res = await fetch('/api/events/extract', {
- *     method: 'POST',
- *     body: JSON.stringify({ text, imageBase64, mediaType }),
- *   });
- *   return res.json();   // same shape extractEvent() returns
+ * The two paths return the same object, so nothing downstream needs to know
+ * which one answered — only `extractedBy` differs, and that is shown to the
+ * operator so they can weigh what they are approving.
  *
- * Server side, that endpoint posts to the Anthropic Messages API with
- * `tools: [EVENT_TOOL_SCHEMA]` and `tool_choice: { type: 'tool', name:
- * 'record_shipment_event' }`, so the model must answer with typed JSON. Keep
- * the key on the server — never ship it to the browser.
+ * The fallback is not a nicety. Field updates arrive at three in the morning
+ * from a border post, and an operator who cannot queue an update because a
+ * model was unavailable is an operator who writes it on paper instead. The
+ * regexes are worse than the model; they are far better than nothing.
+ *
+ * @param {string}  text          The message as received.
+ * @param {object} [options]
+ * @param {string} [options.imageBase64] A tracking screenshot, base64, no data: prefix.
+ * @param {string} [options.mediaType]   image/png, image/jpeg, image/gif, image/webp.
+ * @param {string} [options.context]     What we already know about the consignment.
+ * @returns {Promise<object|null>} Same shape as extractEvent(), plus `extractedBy`.
  */
+export async function extractEventHosted(text, { imageBase64, mediaType, context } = {}) {
+  try {
+    const result = await post('/api/events/extract', { text, imageBase64, mediaType, context });
+    if (result?.label) return { ...result, extractedBy: 'model' };
+  } catch {
+    // Not configured, unreachable, declined, or malformed — all recoverable.
+  }
+  const local = extractEvent(text);
+  return local ? { ...local, extractedBy: 'rules' } : null;
+}
+
 export function describeExtractionPath() {
   return {
     step1: 'Deterministic match resolves WHICH shipment the update belongs to',

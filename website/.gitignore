@@ -22,3 +22,9 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Local env overrides. .env.development is committed on purpose (it holds only
+# a localhost URL); anything ending .local, and any .env.production, is not.
+.env.local
+.env.*.local
+.env.production

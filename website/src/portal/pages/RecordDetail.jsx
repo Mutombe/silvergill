@@ -66,17 +66,26 @@ const safeTitle = (def, record, entity) => {
   catch { return record?.id ?? 'Record'; }
 };
 
+/**
+ * One screen for three situations: no such record, a record outside this
+ * account's scope, and an entity the portal does not know.
+ *
+ * The first two deliberately read the same. The server only ever sent us rows
+ * this account may see, so a missing record is either gone or was never ours —
+ * and saying which would confirm the existence of somebody else's consignment
+ * to anyone willing to guess at reference numbers.
+ */
 const NotFound = ({ entity, reason }) => {
   const def = entityDef(entity);
   return (
     <div className="max-w-xl mx-auto py-16">
       <EmptyState
-        icon={reason === 'forbidden' ? Icons.ShieldAlert : Icons.SearchX}
-        title={reason === 'forbidden' ? 'Not available on your profile' : 'Record not found'}
+        icon={reason === 'unknown' ? Icons.SearchX : Icons.ShieldAlert}
+        title={reason === 'unknown' ? 'Unknown record type' : 'Not available on your profile'}
         description={
-          reason === 'forbidden'
-            ? 'This record exists but is outside what your account is allowed to see.'
-            : 'It may have been deleted, or the link may be out of date.'
+          reason === 'unknown'
+            ? 'That link points at something this portal does not have a page for.'
+            : 'This record either does not exist, or is outside what your account is allowed to see.'
         }
         action={
           <Link to={def?.listPath || '/portal'} className="btn-primary text-sm">
