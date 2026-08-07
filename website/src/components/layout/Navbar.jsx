@@ -2,14 +2,18 @@ import React from 'react';
 import { useState, useEffect } from 'react';
 import { Link, NavLink, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Menu, X, Phone, ChevronDown } from 'lucide-react';
+import { Menu, X, Phone, ChevronDown, LogIn, LayoutDashboard, UserCog, PackageSearch } from 'lucide-react';
 import { siteConfig, navLinks } from '../../data/content';
 import { TiThMenuOutline } from "react-icons/ti";
+import { useAuth } from '../../portal/auth/AuthContext';
+import { useAuthModal } from '../../portal/auth/AuthModalContext';
 
 const Navbar = () => {
   const [isOpen, setIsOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
   const location = useLocation();
+  const { isAuthenticated, home } = useAuth();
+  const { openAuth } = useAuthModal();
 
   useEffect(() => {
     const handleScroll = () => {
@@ -32,7 +36,16 @@ const Navbar = () => {
             {siteConfig.tagline}
           </p>
           <div className="flex items-center gap-6">
-            <a 
+            {!isAuthenticated && (
+              <button
+                onClick={() => openAuth({ audience: 'staff' })}
+                className="flex items-center gap-2 text-silver-300 hover:text-primary-400 transition-colors"
+              >
+                <UserCog size={14} />
+                <span>Staff &amp; contractor portal</span>
+              </button>
+            )}
+            <a
               href={`tel:${siteConfig.contact.phone[0].replace(/\s/g, '')}`}
               className="flex items-center gap-2 hover:text-primary-400 transition-colors"
             >
@@ -119,8 +132,32 @@ const Navbar = () => {
               ))}
             </div>
 
-            {/* CTA Button - Desktop */}
-            <div className="hidden lg:flex items-center gap-4">
+            {/* CTA Buttons - Desktop */}
+            <div className="hidden lg:flex items-center gap-3">
+              <Link
+                to="/track"
+                className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-silver-600 hover:text-primary-600 rounded-xl border border-silver-200 hover:border-primary-300 transition-all"
+              >
+                <PackageSearch size={15} />
+                Track
+              </Link>
+              {isAuthenticated ? (
+                <Link
+                  to={home}
+                  className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-silver-600 hover:text-primary-600 rounded-xl border border-silver-200 hover:border-primary-300 transition-all"
+                >
+                  <LayoutDashboard size={15} />
+                  My Portal
+                </Link>
+              ) : (
+                <button
+                  onClick={() => openAuth({ audience: 'customer' })}
+                  className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-silver-600 hover:text-primary-600 rounded-xl border border-silver-200 hover:border-primary-300 transition-all"
+                >
+                  <LogIn size={15} />
+                  Client Login
+                </button>
+              )}
               <Link
                 to="/contact"
                 className="btn-primary text-sm"
@@ -176,7 +213,7 @@ const Navbar = () => {
                   initial={{ opacity: 0, x: -20 }}
                   animate={{ opacity: 1, x: 0 }}
                   transition={{ delay: navLinks.length * 0.05 }}
-                  className="pt-4"
+                  className="pt-4 space-y-2"
                 >
                   <Link
                     to="/contact"
@@ -184,6 +221,33 @@ const Navbar = () => {
                   >
                     Get a Quote
                   </Link>
+                  <Link to="/track" className="btn-secondary w-full text-center gap-2">
+                    <PackageSearch size={16} />
+                    Track a consignment
+                  </Link>
+                  {isAuthenticated ? (
+                    <Link to={home} className="btn-secondary w-full text-center gap-2">
+                      <LayoutDashboard size={16} />
+                      My Portal
+                    </Link>
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => { setIsOpen(false); openAuth({ audience: 'customer' }); }}
+                        className="btn-secondary w-full text-center gap-2"
+                      >
+                        <LogIn size={16} />
+                        Client Login
+                      </button>
+                      <button
+                        onClick={() => { setIsOpen(false); openAuth({ audience: 'staff' }); }}
+                        className="btn-ghost w-full text-center gap-2 text-sm"
+                      >
+                        <UserCog size={16} />
+                        Staff & contractor sign-in
+                      </button>
+                    </>
+                  )}
                 </motion.div>
                 <motion.div
                   initial={{ opacity: 0, x: -20 }}

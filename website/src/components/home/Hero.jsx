@@ -85,7 +85,9 @@ const HeroHex = () => {
   };
 
   return (
-    <section className="relative min-h-screen overflow-hidden bg-[#0f3a52]">
+    // Mobile keeps a full-height hero and scrolls; desktop takes exactly the
+    // viewport left under the header, so the whole hero is one screen.
+    <section className="relative min-h-screen lg:min-h-[34rem] lg:h-[calc(100svh-var(--sg-header-h))] overflow-hidden bg-[#0f3a52]">
       {/* Background Image */}
       <AnimatePresence mode="wait">
         <motion.div
@@ -108,12 +110,11 @@ const HeroHex = () => {
       <div className="absolute inset-0 bg-gradient-to-br from-[#0f3a52]/95 via-[#134965]/90 to-[#1a5a7a]/85" />
       <div className="absolute inset-0 bg-gradient-to-r from-[#0a2a3d]/80 via-[#0a2a3d]/50 to-transparent" />
 
-      {/* Main Container - FLEX COLUMN on Mobile, ROW on Desktop */}
-      {/* Added pb-20 to ensure scrolling room on mobile */}
-      <div className="relative z-10 min-h-screen flex flex-col lg:flex-row items-start lg:justify-between px-6 lg:px-12 xl:px-20 pt-32 lg:pt-48 pb-20 lg:pb-0">
+      {/* Column on mobile (scrolls), centred row on desktop (one screen). */}
+      <div className="relative z-10 h-full min-h-screen lg:min-h-0 flex flex-col lg:flex-row items-start lg:items-center lg:justify-between gap-8 px-6 lg:px-12 xl:px-20 pt-32 lg:pt-0 pb-20 lg:pb-0">
         
         {/* Left Content Text */}
-        <div className="w-full lg:w-[45%] relative z-20">
+        <div className="w-full lg:w-[45%] lg:max-w-[34rem] relative z-20 shrink-0">
           <AnimatePresence mode="wait">
             <motion.div
               key={currentSlide}
@@ -123,19 +124,20 @@ const HeroHex = () => {
               transition={{ duration: 0.6 }}
             >
               <motion.span
-                className="block text-2xl md:text-3xl lg:text-4xl text-[#7dd3fc] mb-1"
+                className="block text-2xl md:text-3xl lg:text-3xl xl:text-4xl text-[#7dd3fc] mb-1"
                 style={{ fontFamily: "'Playfair Display', Georgia, serif", fontStyle: 'italic' }}
               >
                 {current.subtitle}
               </motion.span>
-              
+
+              {/* Sized off the viewport so the headline never forces a scroll. */}
               <motion.h1
-                className="text-5xl md:text-6xl lg:text-7xl xl:text-8xl font-bold text-white tracking-tight leading-[0.9] mb-6"
+                className="font-bold text-white tracking-tight leading-[0.9] mb-4 lg:mb-5 text-5xl md:text-6xl lg:text-[clamp(3rem,6.5vh+1.5rem,5.5rem)]"
                 style={{ fontFamily: "'Outfit', sans-serif" }}
               >
                 {current.title}
               </motion.h1>
-              
+
               <motion.p className="text-gray-300/90 text-sm md:text-base max-w-[400px] leading-relaxed">
                 {current.description}
               </motion.p>
@@ -143,7 +145,7 @@ const HeroHex = () => {
           </AnimatePresence>
 
           {/* Navigation Buttons */}
-          <div className="flex items-center gap-2 mt-8">
+          <div className="flex items-center gap-2 mt-6 lg:mt-7">
             <button onClick={prevSlide} className="w-10 h-10 border border-white/30 flex items-center justify-center text-white/60 hover:text-white hover:border-white/60 transition-all">
               <ChevronLeft size={18} />
             </button>
@@ -153,7 +155,7 @@ const HeroHex = () => {
           </div>
 
           {/* Social Links */}
-          <div className="hidden lg:flex items-center gap-6 mt-10">
+          <div className="hidden lg:flex items-center gap-6 mt-7 [@media(max-height:760px)]:hidden">
             {socialLinks.map((social, index) => (
               <a key={index} href={social.href} className="text-xs text-gray-400/80 hover:text-[#7dd3fc] transition-colors tracking-[0.15em] uppercase">
                 {social.name}
@@ -166,7 +168,14 @@ const HeroHex = () => {
             DESKTOP HONEYCOMB GRID
             =============================================
         */}
-        <div className="hidden lg:block relative w-[600px] h-[500px] xl:-mr-10">
+        {/* The cluster keeps its hex geometry and scales as a whole, so a short
+            laptop screen shrinks it rather than clipping it. */}
+        <div
+          className="hidden lg:block relative w-[600px] h-[500px] shrink-0 xl:-mr-10 origin-right
+                     scale-[0.78]
+                     [@media(min-height:800px)]:scale-90
+                     [@media(min-height:900px)]:scale-100"
+        >
           <AnimatePresence mode="wait">
             <motion.div
               key={currentSlide}

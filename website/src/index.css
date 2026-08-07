@@ -440,6 +440,49 @@
   }
 }
 
+/* ===== Header height =====
+   The hero sits underneath the sticky header, so a hero of 100vh is always
+   taller than the space actually left on screen. Publishing the header height
+   lets the hero claim exactly the remainder. */
+:root {
+  --sg-header-h: 80px;          /* nav bar only */
+}
+
+@media (min-width: 1024px) {
+  :root {
+    --sg-header-h: 116px;       /* nav bar (80px) + the dark top bar (36px) */
+  }
+}
+
+/* ===== Table card header =====
+   Sits directly above a DataTable inside an unpadded card. Its horizontal
+   padding tracks the table's own cell padding (set by DensityProvider) so the
+   heading lines up with the first column instead of floating out of step. */
+.table-card-head {
+  padding-left: var(--sg-pad-x, 1rem);
+  padding-right: var(--sg-pad-x, 1rem);
+  padding-top: 1.25rem;
+  padding-bottom: 0;
+  min-width: 0;
+}
+
+.sg-density-compact .table-card-head {
+  padding-top: 0.875rem;
+}
+
+.sg-density-spacious .table-card-head {
+  padding-top: 1.5rem;
+}
+
+/* ===== Overflow containment =====
+   A grid or flex child defaults to min-width:auto, which lets a wide table or
+   a long unbroken string push the whole page sideways. These stop that at the
+   layout level rather than relying on every component remembering. */
+.container-custom,
+main {
+  min-width: 0;
+}
+
 /* ===== Custom Scrollbar ===== */
 .custom-scroll {
   scrollbar-width: thin;
