@@ -38,3 +38,23 @@ services:
       - path: /*
         name: Referrer-Policy
         value: strict-origin-when-cross-origin
+
+  # ---------------------------------------------------------------------------
+  # API. Runs against Neon Postgres; the connection string and JWT secret are
+  # set in the Render dashboard, never in this file.
+  # ---------------------------------------------------------------------------
+  - type: web
+    runtime: node
+    name: silvergill-api
+    rootDir: server
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: DATABASE_URL
+        sync: false          # set in the dashboard
+      - key: JWT_SECRET
+        generateValue: true
+      - key: CORS_ORIGINS
+        value: https://silvergill.onrender.com
