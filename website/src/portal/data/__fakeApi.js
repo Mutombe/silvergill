@@ -179,6 +179,41 @@ function handle(path, method, body, token) {
     return json(200, store.users.map(strip));
   }
 
+  /* ---- workflow endpoints ---- */
+  if (parts[0] === 'pods' && method === 'POST') {
+    const row = { id: `POD-${(counter += 1)}`, ...body, synced: true };
+    store.pods = [row, ...store.pods];
+    const ship = store.shipments.find((s) => s.id === body.shipmentId);
+    if (ship) ship.status = 'Delivered';
+    return json(201, row);
+  }
+  if (parts[0] === 'inbox' && parts[2]) {
+    const item = store.inboxQueue.find((i) => i.id === decodeURIComponent(parts[1]));
+    if (!item) return json(404, { error: 'not found' });
+    if (user.role !== 'ops' && user.role !== 'admin') {
+      return json(403, { error: 'not permitted for your role' });
+    }
+    if (item.status !== 'pending') return json(409, { error: 'already resolved' });
+    item.status = parts[2] === 'approve' ? 'approved' : 'rejected';
+    return json(200, { ok: true });
+  }
+  if (parts[0] === 'quotations' && parts[2] === 'respond') {
+    const quote = store.quotations.find(
+      (x) => x.id === decodeURIComponent(parts[1]) && x.customerId === user.customerId
+    );
+    if (!quote) return json(404, { error: 'not found' });
+    quote.status = body?.accept ? 'Accepted' : 'Declined';
+    return json(200, { ok: true });
+  }
+  if (parts[0] === 'jobs' && (parts[2] === 'respond' || parts[2] === 'update')) {
+    const job = store.jobs.find((j) => j.id === decodeURIComponent(parts[1])
+      && (user.role !== 'supplier' || j.supplierId === user.supplierId));
+    if (!job) return json(404, { error: 'not found' });
+    if (parts[2] === 'respond') job.status = body?.accept ? 'Accepted' : 'Declined';
+    else { job.status = 'In Progress'; job.lastUpdate = body?.note; }
+    return json(200, job);
+  }
+
   /* ---- generic reads ---- */
   const collection = TABLES[parts[0]];
   if (collection && method === 'GET') {

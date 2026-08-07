@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import { useAuth } from '../auth/AuthContext';
 import { useCollection } from '../hooks';
 import * as db from '../data/db';
+import { post } from '../data/api';
 import { enqueue, BC_ENDPOINTS } from '../data/bcClient';
 import { record, notify } from '../data/activity';
 
@@ -142,11 +143,14 @@ const JobBoard = ({ jobs, suppliers, shipments, isSupplier }) => {
     setDocs([]);
   };
 
-  const respond = (job, accept) => {
-    db.update('jobs', job.id, {
-      status: accept ? 'Accepted' : 'Declined',
-      respondedAt: new Date().toISOString(),
-    });
+  const respond = async (job, accept) => {
+    try {
+      await post(`/api/jobs/${encodeURIComponent(job.id)}/respond`, { accept });
+    } catch (err) {
+      toast.error('That response was not recorded', { description: err.message });
+      return;
+    }
+    await db.refresh('jobs');
     enqueue({
       entity: 'jobStatus',
       endpoint: BC_ENDPOINTS.jobStatus.replace('{no}', job.id),
@@ -160,17 +164,25 @@ const JobBoard = ({ jobs, suppliers, shipments, isSupplier }) => {
     setOpen(null);
   };
 
-  const pushUpdate = () => {
-    if (open.shipmentId && statusUpdate) {
-      db.update('shipments', open.shipmentId, { status: statusUpdate });
+  // A contractor reports; operations decides. The note reaches operations
+  // immediately, but it does not move the consignment on its own — that
+  // judgement belongs to the people who answer to the customer for it.
+  const pushUpdate = async () => {
+    const body = note || (statusUpdate ? `Reporting status as ${statusUpdate}` : '');
+    if (!body) {
+      toast.error('Nothing to send', { description: 'Write a note or pick a status.' });
+      return;
     }
-    db.update('jobs', open.id, {
-      status: 'In Progress',
-      lastUpdate: note || `Status set to ${statusUpdate}`,
-      lastUpdateAt: new Date().toISOString(),
-      documents: [...(open.documents || []), ...docs],
+    try {
+      await post(`/api/jobs/${encodeURIComponent(open.id)}/update`, { note: body });
+    } catch (err) {
+      toast.error('Update not sent', { description: err.message });
+      return;
+    }
+    await db.refresh('jobs');
+    toast.success('Update sent', {
+      description: 'Operations can see it now and will publish anything the customer needs.',
     });
-    toast.success('Update sent', { description: 'Operations can see this immediately.' });
     setOpen(null);
   };
 

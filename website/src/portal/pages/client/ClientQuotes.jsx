@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import { useAuth } from '../../auth/AuthContext';
 import { useCollection } from '../../hooks';
 import * as db from '../../data/db';
+import { post } from '../../data/api';
 import { record, notify } from '../../data/activity';
 import { priceQuotation, transitWindow, origins } from '../../engine/pricing';
 import { commodities, ports, transportModes } from '../../data/seed';
@@ -71,17 +72,17 @@ const ClientQuotes = () => {
 const QuoteList = ({ quotes, awaiting, user }) => {
   const [open, setOpen] = useState(null);
 
-  const respond = (quote, accept) => {
-    db.update('quotations', quote.id, {
-      status: accept ? 'Accepted' : 'Declined',
-      respondedAt: new Date().toISOString(),
-    });
-    record(
-      user,
-      accept ? 'quotation.accept' : 'quotation.decline',
-      quote.id,
-      `${user.name} ${accept ? 'accepted' : 'declined'} quotation ${quote.id}`
-    );
+  // Accepting a quotation is a commercial commitment, so it is recorded by the
+  // server against the account that made it — not by a status flag the browser
+  // sets on a row it happens to be holding.
+  const respond = async (quote, accept) => {
+    try {
+      await post(`/api/quotations/${encodeURIComponent(quote.id)}/respond`, { accept });
+    } catch (err) {
+      toast.error('That response was not recorded', { description: err.message });
+      return;
+    }
+    await db.refresh('quotations');
     notify({
       forRoles: ['sales', 'management'],
       severity: accept ? 'info' : 'warning',

@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import { useAuth } from '../auth/AuthContext';
 import { useCollection } from '../hooks';
 import * as db from '../data/db';
+import { post } from '../data/api';
 import { record, notify } from '../data/activity';
 import { matchShipment, MATCH_METHODS } from '../engine/matching';
 import {
@@ -521,57 +522,31 @@ const ApprovalQueue = ({ queue, shipments, user }) => {
     setEdited(item.extraction?.label || '');
   };
 
-  const approve = (item, labelOverride) => {
-    const shipment = shipments.find((s) => s.id === item.shipmentId);
+  // Approving is one call, not four. The server writes the event, moves the
+  // consignment, closes the queue item and notifies the customer inside a
+  // single handler — which is the only way those four things cannot end up
+  // disagreeing with each other because a browser lost signal halfway.
+  const approve = async (item, labelOverride) => {
     const label = labelOverride ?? item.extraction.label;
-
-    db.insert('shipmentEvents', {
-      shipmentId: item.shipmentId,
-      type: item.extraction.type,
-      label,
-      locationText: item.extraction.location_text,
-      statusHint: item.extraction.status_hint,
-      source: item.source,
-      confidence: item.confidence,
-      approved: true,
-      rawText: item.rawText,
-      at: item.receivedAt,
-      approvedAt: new Date().toISOString(),
-      matchedBy: item.matchedBy,
-    });
-
-    // Approving an event is what actually moves the consignment.
-    const patch = {};
-    if (item.extraction.location_text) patch.currentLocation = item.extraction.location_text;
-    if (item.extraction.status_hint) patch.status = item.extraction.status_hint;
-    if (Object.keys(patch).length) db.update('shipments', item.shipmentId, patch);
-
-    db.update('inboxQueue', item.id, { status: 'approved', approvedAt: new Date().toISOString() });
-
-    record(user, 'inbox.approve', item.shipmentId, `Published "${label}" to ${item.shipmentId}`);
-
-    // Now — and only now — the customer hears about it.
-    if (shipment) {
-      db.read('users')
-        .filter((u) => u.role === 'client' && u.customerId === shipment.customerId)
-        .forEach((clientUser) =>
-          notify({
-            forUserId: clientUser.id,
-            severity: item.extraction.type === 'exception' || item.extraction.type === 'delay' ? 'warning' : 'info',
-            title: `${item.shipmentId} — ${label}`,
-            body: `Updated ${new Date().toLocaleDateString('en-GB')}.`,
-            link: '/portal/my',
-          })
-        );
+    try {
+      await post(`/api/inbox/${encodeURIComponent(item.id)}/approve`, { label });
+    } catch (err) {
+      toast.error('Not published', { description: err.message });
+      return;
     }
-
+    await Promise.all(['inboxQueue', 'shipments', 'shipmentEvents', 'notifications'].map(db.refresh));
     toast.success('Published', { description: `${item.shipmentId} updated and the customer notified.` });
     setOpen(null);
   };
 
-  const reject = (item) => {
-    db.update('inboxQueue', item.id, { status: 'rejected', approvedAt: new Date().toISOString() });
-    record(user, 'inbox.reject', item.shipmentId, `Rejected an update on ${item.shipmentId}`);
+  const reject = async (item) => {
+    try {
+      await post(`/api/inbox/${encodeURIComponent(item.id)}/reject`);
+    } catch (err) {
+      toast.error('Not rejected', { description: err.message });
+      return;
+    }
+    await db.refresh('inboxQueue');
     toast.success('Rejected', { description: 'Nothing was published.' });
     setOpen(null);
   };

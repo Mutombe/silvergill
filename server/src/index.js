@@ -503,6 +503,42 @@ app.post('/api/jobs/:id/respond', requireAuth, requireRole('supplier'), async (r
   res.json({ ok: true });
 });
 
+/**
+ * A contractor posting progress on their own work order.
+ *
+ * Deliberately narrow. A contractor may say what is happening with their job;
+ * they may not move the consignment. Whether a load is now At Border is
+ * operations' call, made from the update queue where a human sees the evidence
+ * — not something a subcontractor sets directly on a customer-facing record.
+ */
+app.post('/api/jobs/:id/update', requireAuth, requireRole('supplier', 'ops', 'management'),
+  async (req, res) => {
+    const note = String(req.body?.note || '').trim();
+    if (!note) return res.status(400).json({ error: 'a note is required' });
+
+    const scope = req.user.role === 'supplier' ? ' and supplier_id = $2' : '';
+    const params = req.user.role === 'supplier' ? [req.params.id, req.user.supplierId] : [req.params.id];
+    const job = await one(`select * from jobs where id = $1${scope}`, params);
+    if (!job) return res.status(404).json({ error: 'not found' });
+
+    await q(
+      `update jobs set status = 'In Progress', last_update = $1, last_update_at = now()
+        where id = $2`,
+      [note, job.id]
+    );
+    await audit(req.user, 'job.update', job.id, `${req.user.name} posted an update on ${job.id}`);
+
+    // Operations needs to know, since they are the ones who decide whether it
+    // changes anything the customer sees.
+    await q(
+      `insert into notifications(id, for_roles, severity, title, body, link)
+       values ($1, to_jsonb(array['ops']), 'info', $2, $3, '/portal/suppliers')`,
+      [newId('NTF'), `Update on ${job.id}`, note.slice(0, 200)]
+    );
+
+    res.json(toClient(await one('select * from jobs where id = $1', [job.id])));
+  });
+
 /* ===== Admin: user management ===== */
 
 app.post('/api/users', requireAuth, requireRole('admin'), async (req, res) => {

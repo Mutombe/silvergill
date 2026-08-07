@@ -69,6 +69,19 @@ const SERVER_WRITABLE = new Set([
 ]);
 
 /**
+ * Collections whose creation has its own endpoint rather than going through the
+ * generic writer, because the server does more than insert a row.
+ *
+ * A proof of delivery is the example: capturing one also marks the consignment
+ * delivered and tells the customer. Doing that from the browser would mean
+ * three calls that can half-succeed; doing it in one handler means the
+ * consignment is never delivered without its POD, or the reverse.
+ */
+const CUSTOM_CREATE = {
+  pods: { path: '/api/pods', then: ['shipments', 'notifications'] },
+};
+
+/**
  * Collections fetched only for staff. Asking as a customer would earn a 403 for
  * no benefit, so we do not ask.
  */
@@ -254,7 +267,24 @@ export function insert(collection, record) {
   if (LOCAL_ONLY.has(collection)) persistLocal();
   notify();
 
-  if (SERVER_WRITABLE.has(collection)) {
+  const custom = CUSTOM_CREATE[collection];
+  if (custom) {
+    post(custom.path, row)
+      .then(async (saved) => {
+        // The handler did more than insert; pull back whatever it also changed.
+        if (saved?.id && saved.id !== row.id) {
+          cache[collection] = (cache[collection] || []).map((r) =>
+            (r.id === row.id ? { ...r, id: saved.id } : r));
+        }
+        notify();
+        await Promise.all((custom.then || []).map(refresh));
+      })
+      .catch((err) => {
+        cache[collection] = (cache[collection] || []).filter((r) => r.id !== row.id);
+        notify();
+        reportError('save', collection, err);
+      });
+  } else if (SERVER_WRITABLE.has(collection)) {
     post(`/api/${TABLE_FOR[collection]}`, row)
       .then((saved) => {
         // Take the server's version: it may have filled defaults or normalised
@@ -272,6 +302,23 @@ export function insert(collection, record) {
   }
 
   return clone(row);
+}
+
+/**
+ * Change the cache without telling the server.
+ *
+ * For consequences another endpoint already owns — a consignment going
+ * Delivered because a POD was captured, say. The row is refreshed from the
+ * server moments later; this only stops the interface lagging behind the
+ * action the user just took.
+ */
+export function localUpdate(collection, id, patchFields) {
+  const rows = cache[collection] || [];
+  const index = rows.findIndex((r) => r.id === id);
+  if (index === -1) return null;
+  rows[index] = { ...rows[index], ...patchFields };
+  notify();
+  return clone(rows[index]);
 }
 
 /** Shallow-merge a patch into one record. */

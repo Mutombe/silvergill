@@ -297,8 +297,10 @@ const PodCapture = ({ shipments, pods, driverId, drivers, user }) => {
       synced: false,
     });
 
-    // Mark the shipment delivered locally so the driver sees it move immediately.
-    db.update('shipments', shipmentId, { status: 'Delivered' });
+    // Show it delivered straight away. The server does the real transition as
+    // part of accepting the POD, and refreshes this row behind us — a driver
+    // has no authority to move a consignment on their own.
+    db.localUpdate('shipments', shipmentId, { status: 'Delivered' });
 
     enqueue({
       entity: 'pod',
